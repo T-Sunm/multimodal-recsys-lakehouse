@@ -1,0 +1,43 @@
+
+# Name your project! Project names should contain only lowercase characters
+# and underscores. A good package name should reflect your organization's
+# name or the intended use of these models
+name: 'recsys_transform'
+version: '1.0.0'
+
+# This setting configures which "profile" dbt uses for this project.
+profile: 'recsys_transform'
+
+# These configurations specify where dbt should look for different types of files.
+# The `model-paths` config, for example, states that models in this project can be
+# found in the "models/" directory. You probably won't need to change these!
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+clean-targets:         # directories to be removed by `dbt clean`
+  - "target"
+  - "dbt_packages"
+
+
+models:
+  recsys_transform:
+    # Layer Bronze: Staging and raw mapping (Target: recsys_silver)
+    bronze:
+      +materialized: view
+      +schema: silver
+
+    # Layer Silver: Cleaned and normalized data (Target: recsys_silver)
+    silver:
+      +materialized: table
+      +file_format: iceberg
+      +schema: silver
+
+    # Layer Gold: Analytics and features (Target: recsys_gold)
+    gold:
+      +materialized: table
+      +file_format: iceberg
+      +schema: gold

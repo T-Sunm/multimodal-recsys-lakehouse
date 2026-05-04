@@ -1,0 +1,42 @@
+version: 2
+
+sources:
+  - name: recsys_raw
+    description: "Raw MicroLens files ingested bởi Spark Ingest Job vào MinIO (s3://datalake/recsys/bronze/)"
+    schema: recsys_raw
+    tables:
+      - name: interactions_staging
+        description: "pairs.csv: raw user-item interactions (user, item, timestamp ms)"
+        columns:
+          - name: user
+            description: "Raw user ID (string)"
+          - name: item
+            description: "Raw item ID (string)"
+          - name: timestamp
+            description: "Unix timestamp milliseconds (numeric string)"
+
+      - name: items_staging
+        description: "titles.csv: item metadata (item, title)"
+        columns:
+          - name: item
+            description: "Raw item ID (string)"
+          - name: title
+            description: "Item title (UTF-8 string)"
+
+      - name: likes_views_staging
+        description: "likes_and_views.txt: item engagement counts (item, like, view) — tab-separated, no header"
+        columns:
+          - name: item
+            description: "Raw item ID (string)"
+          - name: like_count
+            description: "Raw like count"
+          - name: view_count
+            description: "Raw view count"
+
+      - name: visual_embeddings_staging
+        description: "visual_embeddings.parquet: 768-dim Swin Transformer embeddings per item"
+        columns:
+          - name: item_id
+            description: "Item ID (int)"
+          - name: visual_embedding
+            description: "ARRAY<FLOAT> 768-dim embedding"

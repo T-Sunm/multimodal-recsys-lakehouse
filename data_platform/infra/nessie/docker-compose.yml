@@ -3,7 +3,7 @@ version: '3.8'
 services:
   nessie:
     image: ghcr.io/projectnessie/nessie:0.107.2-java
-    container_name: nessie_container
+    container_name: nessie
     environment:
       # Version store — JDBC backed by PostgreSQL
       - NESSIE_VERSION_STORE_TYPE=JDBC

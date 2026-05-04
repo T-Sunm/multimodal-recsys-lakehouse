@@ -1,0 +1,46 @@
+version: 2
+
+models:
+  - name: gold_item_features
+    description: "Unified item serve table: metadata + 768-dim visual embedding. Primary table cho inference và ANN indexing."
+    columns:
+      - name: item_id
+        description: "Item ID (INT)"
+      - name: title
+        description: "Item title"
+      - name: like_count
+        description: "Raw like count"
+      - name: view_count
+        description: "Raw view count"
+      - name: like_log
+        description: "log1p(like_count)"
+      - name: view_log
+        description: "log1p(view_count)"
+      - name: visual_embedding
+        description: "ARRAY<FLOAT> 768-dim Swin Transformer embedding"
+
+  - name: gold_popularity_stats
+    description: "Item popularity score = 0.3*norm_like + 0.3*norm_view + 0.4*norm_freq. Dùng cho reranking."
+    columns:
+      - name: item_id
+        description: "Item ID"
+      - name: popularity_score
+        description: "Weighted normalized popularity [0, 1]"
+
+  - name: gold_training_samples
+    description: "ML training samples cho next-item prediction. Mỗi row = 1 sample (s_item, target_item, split)."
+    columns:
+      - name: sample_id
+        description: "HASH(user_id, target_rank) — unique sample identifier"
+      - name: user_id
+        description: "User ID"
+      - name: s_item
+        description: "ARRAY<INT> — interaction history (prefix), max seq_len-1"
+      - name: s_item_len
+        description: "Actual history length (dùng cho padding mask)"
+      - name: item
+        description: "Target item ID (positive sample)"
+      - name: split
+        description: "train / val / test"
+      - name: timestamp
+        description: "Target event timestamp"

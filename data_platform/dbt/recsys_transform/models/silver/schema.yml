@@ -1,0 +1,54 @@
+version: 2
+
+models:
+  - name: silver_interactions
+    description: "Cleaned interactions: typed user_id/item_id (INT), timestamp (unix seconds), event_date, deduplicated"
+    columns:
+      - name: user_id
+        description: "Internal user ID (INT > 0)"
+      - name: item_id
+        description: "Internal item ID (INT > 0)"
+      - name: timestamp
+        description: "Unix epoch seconds (BIGINT)"
+      - name: event_date
+        description: "Interaction date (DATE)"
+
+  - name: silver_items
+    description: "Cleaned item metadata with log-normalized engagement signals"
+    columns:
+      - name: item_id
+        description: "Internal item ID (INT)"
+      - name: title
+        description: "Cleaned title string"
+      - name: like_count
+        description: "Raw like count (BIGINT)"
+      - name: view_count
+        description: "Raw view count (BIGINT)"
+      - name: like_log
+        description: "log1p(like_count)"
+      - name: view_log
+        description: "log1p(view_count)"
+
+  - name: silver_visual_embeddings
+    description: "Validated 768-dim Swin Transformer embeddings per item"
+    columns:
+      - name: item_id
+        description: "Item ID (INT)"
+      - name: visual_embedding
+        description: "ARRAY<FLOAT> 768-dim"
+      - name: embedding_dim
+        description: "Must equal 768"
+
+  - name: silver_user_sequences
+    description: "Per-user interaction sequence (sliding window, max_seq_len=50)"
+    columns:
+      - name: user_id
+        description: "User ID"
+      - name: item_sequence
+        description: "ARRAY<INT> — chronological item history, max 50"
+      - name: seq_len
+        description: "Actual sequence length (capped at 50)"
+      - name: total_events
+        description: "Total interaction count before truncation"
+      - name: user_tier
+        description: "cold / warm / hot"
