@@ -1,13 +1,12 @@
 """
-Producer: Ingest Raw Data → Staging Transform
-Layer   : Ingestion → Staging
-Trigger : @daily (schedule-based)
-Output  : DS_RAW_PARQUET_READY
+Producer: Ingest RecSys Raw Data → Iceberg (recsys_raw.*)
+Layer   : Ingestion
+Trigger : @daily
+Output  : DS_RECSYS_RAW_READY
 
 Pipeline:
-  1. ingest_raw_csv_to_parquet  → staging/parquet/{train,weather,...}
-  2. run_staging_transform       → staging/stg_{sales,weather,key,...}
-  Sau bước 2 mới emit DS_RAW_PARQUET_READY để downstream đọc stg_* đúng.
+  1. ingest_recsys_raw → nessie.recsys_raw.{interactions,items,likes_views,visual_embeddings}_staging
+  Sau bước 1 mới emit DS_RECSYS_RAW_READY để dbt recsys_transform có thể chạy.
 """
 from airflow import DAG
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
@@ -15,7 +14,7 @@ from pendulum import datetime
 import sys, os
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-from datasets import DS_RAW_PARQUET_READY
+from datasets import DS_RECSYS_RAW_READY
 
 SPARK_CONF = {
     "spark.submit.deployMode": "client",
@@ -32,41 +31,30 @@ JARS = ",".join([
 ])
 
 
-def emit_raw_parquet_ready(context, result=None):
+def emit_recsys_raw_ready(context, result=None):
     logical_date = context.get("logical_date")
-    context["outlet_events"][DS_RAW_PARQUET_READY].extra = {
+    context["outlet_events"][DS_RECSYS_RAW_READY].extra = {
         "run_date": context.get("ds") or (logical_date.to_date_string() if logical_date else None),
         "batch_id": context.get("run_id"),
     }
 
 
 with DAG(
-    dag_id="producer_ingest_raw",
+    dag_id="producer_recsys_ingestion",
     start_date=datetime(2024, 1, 1),
     schedule="@daily",
     catchup=False,
     max_active_runs=1,
-    tags=["layer:ingestion", "domain:all"],
+    tags=["layer:ingestion", "domain:recsys"],
 ) as dag:
 
     ingest = SparkSubmitOperator(
-        task_id="ingest_raw_csv_to_parquet",
-        application="/opt/spark/jobs/staging/ingest_raw_to_parquet.py",
+        task_id="ingest_recsys_raw_to_iceberg",
+        application="/opt/spark/jobs/staging/ingest_recsys_raw.py",
         conn_id="spark_default",
         properties_file="/opt/spark/conf/spark-defaults.conf",
         jars=JARS,
         conf=SPARK_CONF,
+        outlets=[DS_RECSYS_RAW_READY],
+        post_execute=emit_recsys_raw_ready,
     )
-
-    transform = SparkSubmitOperator(
-        task_id="run_staging_transform",
-        application="/opt/spark/jobs/staging/staging_transform.py",
-        conn_id="spark_default",
-        properties_file="/opt/spark/conf/spark-defaults.conf",
-        jars=JARS,
-        conf=SPARK_CONF,
-        outlets=[DS_RAW_PARQUET_READY],
-        post_execute=emit_raw_parquet_ready,
-    )
-
-    ingest >> transform

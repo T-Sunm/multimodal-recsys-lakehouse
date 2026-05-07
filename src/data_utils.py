@@ -1,7 +1,6 @@
 import torch
 import random
 import pandas as pd
-from copy import deepcopy
 from torch.utils.data import DataLoader, Dataset
 
 random.seed(0)
@@ -46,70 +45,60 @@ class VisualLookup:
 
 
 class SampleGenerator:
-    """Construct dataset for NCF with sequence support."""
+    """
+    Construct dataset for NCF using pre-processed samples from Lakehouse Gold Layer.
+    Binarization, Splitting, and Sequence Building are already handled by the dbt pipeline.
+    """
 
-    def __init__(self, ratings: pd.DataFrame, visual_embeddings: dict, maxlen: int = 50):
-        assert {'userId', 'itemId', 'rating', 'timestamp'}.issubset(ratings.columns)
-
-        self.ratings           = ratings
+    def __init__(self, gold_df: pd.DataFrame, visual_embeddings: dict, maxlen: int = 50):
         self.visual_embeddings = visual_embeddings
         self.maxlen            = maxlen
-        self.user_pool         = set(ratings['userId'].unique())
-        self.item_pool         = set(ratings['itemId'].unique())
-        self.negatives         = self._sample_negative(ratings)
-        self.train_ratings, self.test_ratings = self._split_loo(self._binarize(ratings))
-        
-        # Build user history sorted by timestamp for sequence generation
-        sorted_ratings = ratings.sort_values(['userId', 'timestamp'], ascending=[True, True])
-        self.user_history = sorted_ratings.groupby('userId')['itemId'].apply(list).to_dict()
+        self.item_pool         = set(gold_df['item'].unique())
 
-    def _binarize(self, ratings):
-        ratings = ratings.copy()
-        ratings.loc[ratings['rating'] > 0, 'rating'] = 1.0
-        return ratings
-
-    def _split_loo(self, ratings):
-        """Leave-one-out train/test split by timestamp."""
-        ratings['rank_latest'] = ratings.groupby('userId')['timestamp'].rank(method='first', ascending=False)
-        test  = ratings[ratings['rank_latest'] == 1]
-        train = ratings[ratings['rank_latest'] >  1]
-        assert train['userId'].nunique() == test['userId'].nunique()
-        return train[['userId', 'itemId', 'rating']], test[['userId', 'itemId', 'rating']]
-
-    def _sample_negative(self, ratings):
-        interact_status = (
-            ratings.groupby('userId')['itemId']
-            .apply(set).reset_index()
-            .rename(columns={'itemId': 'interacted_items'})
+        # Use pre-defined splits from dbt
+        self.train_ratings = gold_df[gold_df['split'] == 'train'].reset_index(drop=True)
+        # For testing, we typically use the last interaction in the test split
+        self.test_ratings  = (
+            gold_df[gold_df['split'] == 'test']
+            .sort_values('timestamp')
+            .groupby('user_id').last()
+            .reset_index()
         )
-        interact_status['negative_items']   = interact_status['interacted_items'].apply(lambda x: self.item_pool - x)
-        interact_status['negative_samples'] = interact_status['negative_items'].apply(lambda x: random.sample(list(x), 99))
-        # Store as dict for O(1) lookup — avoids storing large sets inside DataFrame and costly merge
-        self._neg_items = dict(zip(interact_status['userId'], interact_status['negative_items']))
-        return interact_status[['userId', 'negative_samples']]
 
-    def _get_seq(self, uid, target_iid):
-        """Get sequence of items viewed before target_iid (padded with 0s at the left)."""
-        hist = self.user_history.get(uid, [])
-        try:
-            idx = hist.index(target_iid)
-            seq = hist[:idx] # Items before the target item
-        except ValueError:
-            seq = hist       # Fallback if item not found (e.g. negative item, or test item)
-            
-        # Pad or truncate
+        # Negative sampling (still needed in Python)
+        self.neg_items = gold_df.groupby('user_id')['item'].apply(set).to_dict()
+        self.negatives = self._sample_negative_evaluation(self.test_ratings)
+
+    def _sample_negative_evaluation(self, test_df):
+        """Sample 99 negatives for each user for evaluation."""
+        neg_samples = []
+        for row in test_df.itertuples():
+            uid = row.user_id
+            interacted = self.neg_items.get(uid, set())
+            neg_pool = list(self.item_pool - interacted)
+            neg_samples.append(random.sample(neg_pool, 99))
+        
+        test_df['negative_samples'] = neg_samples
+        return test_df[['user_id', 'negative_samples']]
+
+    def _pad(self, seq):
+        """Left-pad sequence to maxlen."""
+        seq = list(seq)
         seq = seq[-self.maxlen:]
-        padded_seq = [0] * (self.maxlen - len(seq)) + seq
-        return padded_seq
+        return [0] * (self.maxlen - len(seq)) + seq
 
     def instance_a_train_loader(self, num_negatives, batch_size):
         users, seqs, items, ratings = [], [], [], []
         for row in self.train_ratings.itertuples():
-            uid, iid = int(row.userId), int(row.itemId)
-            seq = self._get_seq(uid, iid)
+            uid, iid = int(row.user_id), int(row.item)
+            seq = self._pad(row.s_item)
             
-            users.append(uid); seqs.append(seq); items.append(iid); ratings.append(float(row.rating))
-            for neg in random.sample(list(self._neg_items[uid]), num_negatives):
+            # Positive sample
+            users.append(uid); seqs.append(seq); items.append(iid); ratings.append(1.0)
+            
+            # Negative samples
+            neg_pool = list(self.item_pool - self.neg_items.get(uid, set()))
+            for neg in random.sample(neg_pool, num_negatives):
                 users.append(uid); seqs.append(seq); items.append(int(neg)); ratings.append(0.0)
         
         dataset = UserItemRatingDataset(
@@ -123,27 +112,16 @@ class SampleGenerator:
 
     @property
     def evaluate_data(self):
-        test = pd.merge(self.test_ratings, self.negatives[['userId', 'negative_samples']], on='userId')
+        test = pd.merge(self.test_ratings, self.negatives, on='user_id')
         test_users, test_seqs, test_items, neg_users, neg_seqs, neg_items = [], [], [], [], [], []
+        
         for row in test.itertuples():
-            uid, iid = int(row.userId), int(row.itemId)
-            # Dùng tất cả lịch sử (không bao gồm test_item)
-            hist = self.user_history.get(uid, [])
-            try:
-                idx = hist.index(iid)
-                seq = hist[:idx]
-            except:
-                seq = hist[:-1] # test item usually at the end
-            seq = seq[-self.maxlen:]
-            padded_seq = [0] * (self.maxlen - len(seq)) + seq
+            uid, iid = int(row.user_id), int(row.item)
+            seq = self._pad(row.s_item)
             
-            test_users.append(uid)
-            test_seqs.append(padded_seq)
-            test_items.append(iid)
+            test_users.append(uid); test_seqs.append(seq); test_items.append(iid)
             for neg in row.negative_samples:
-                neg_users.append(uid)
-                neg_seqs.append(padded_seq)
-                neg_items.append(int(neg))
+                neg_users.append(uid); neg_seqs.append(seq); neg_items.append(int(neg))
                 
         test_items_t = torch.LongTensor(test_items)
         neg_items_t  = torch.LongTensor(neg_items)
